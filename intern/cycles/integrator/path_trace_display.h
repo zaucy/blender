@@ -36,6 +36,7 @@ class PathTraceDisplay {
    * When the `reset_rendering` a complete display reset happens. When it is false reset happens
    * for a new state of the buffer parameters which is assumed to correspond to the next tile. */
   void reset(const BufferParams &buffer_params, bool reset_rendering);
+  void set_display_params(const BufferParams &buffer_params);
 
   /* --------------------------------------------------------------------
    * Update procedure.

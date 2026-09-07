@@ -115,6 +115,9 @@ class PathTrace {
   /* Flush outstanding display commands before ending the render loop. */
   void flush_display();
 
+  /* Update display quad parameters on the display driver. */
+  void set_display_params(const BufferParams &buffer_params);
+
   /* Cancel rendering process as soon as possible, without waiting for full tile to be sampled.
    * Used in cases like reset of render session.
    *

@@ -342,14 +342,21 @@ static BufferParams slice_buffer_params(const BufferParams &buffer_params,
   return slice_params;
 }
 
+static BufferParams scale_buffer_params(const BufferParams &params, const float resolution_divider);
+
 void PathTrace::update_allocated_work_buffer_params()
 {
   const int overscan = tile_manager_.get_tile_overscan();
 
+  BufferParams alloc_params = big_tile_params_;
+  if (alloc_params.target_width > 0 && alloc_params.target_height > 0) {
+    alloc_params = scale_buffer_params(big_tile_params_, 1.0f);
+  }
+
   const int num_works = path_trace_works_.size();
   for (int i = 0; i < num_works; ++i) {
     const BufferParams slice_params = slice_buffer_params(
-        big_tile_params_, 1.0f, big_tile_params_.window_height, work_balance_infos_, i, overscan);
+        alloc_params, 1.0f, alloc_params.window_height, work_balance_infos_, i, overscan);
 
     RenderBuffers *buffers = path_trace_works_[i]->get_render_buffers();
     buffers->reset(slice_params);
@@ -359,6 +366,49 @@ void PathTrace::update_allocated_work_buffer_params()
 static BufferParams scale_buffer_params(const BufferParams &params, const float resolution_divider)
 {
   BufferParams scaled_params = params;
+
+  if (params.target_width > 0 && params.target_height > 0) {
+    const float eff_divider = max(1.0f, resolution_divider);
+    const int target_w = max(1, int(params.target_width / eff_divider));
+    const int target_h = max(1, int(params.target_height / eff_divider));
+
+    if (params.window_width == target_w && params.window_height == target_h) {
+      scaled_params.window_x = 0;
+      scaled_params.window_y = 0;
+      scaled_params.window_width = target_w;
+      scaled_params.window_height = target_h;
+      scaled_params.width = target_w;
+      scaled_params.height = target_h;
+      scaled_params.full_x = 0;
+      scaled_params.full_y = 0;
+      scaled_params.full_width = target_w;
+      scaled_params.full_height = target_h;
+      scaled_params.update_offset_stride();
+      return scaled_params;
+    }
+
+    const float scale_x = float(target_w) / float(max(1, params.window_width));
+    const float scale_y = float(target_h) / float(max(1, params.window_height));
+
+    scaled_params.window_x = int(params.window_x * scale_x);
+    scaled_params.window_y = int(params.window_y * scale_y);
+    scaled_params.window_width = target_w;
+    scaled_params.window_height = target_h;
+
+    scaled_params.width = max(int(params.width * scale_x),
+                              scaled_params.window_x + scaled_params.window_width);
+    scaled_params.height = max(int(params.height * scale_y),
+                               scaled_params.window_y + scaled_params.window_height);
+
+    scaled_params.full_x = int(params.full_x * scale_x);
+    scaled_params.full_y = int(params.full_y * scale_y);
+    scaled_params.full_width = max(1, int(params.full_width * scale_x));
+    scaled_params.full_height = max(1, int(params.full_height * scale_y));
+
+    scaled_params.update_offset_stride();
+
+    return scaled_params;
+  }
 
   scaled_params.window_x = int(params.window_x / resolution_divider);
   scaled_params.window_y = int(params.window_y / resolution_divider);
@@ -393,23 +443,28 @@ void PathTrace::update_effective_work_buffer_params(const RenderWork &render_wor
 
   const int overscan = tile_manager_.get_tile_overscan();
   const int scaled_overscan = int(overscan / resolution_divider);
-  const int full_res_window_height = big_tile_params_.window_height;
+  const bool match_render_res = (big_tile_params_.target_width > 0 &&
+                                 big_tile_params_.target_height > 0);
+  const int full_res_window_height = match_render_res ? scaled_big_tile_params.window_height :
+                                                        big_tile_params_.window_height;
 
   const int num_works = path_trace_works_.size();
   for (int i = 0; i < num_works; ++i) {
-    const BufferParams denoised_slice_params = slice_buffer_params(denoised_big_tile_params,
-                                                                   denoised_resolution_divider,
-                                                                   full_res_window_height,
-                                                                   work_balance_infos_,
-                                                                   i,
-                                                                   overscan);
+    const BufferParams denoised_slice_params = slice_buffer_params(
+        denoised_big_tile_params,
+        match_render_res ? 1.0f : denoised_resolution_divider,
+        full_res_window_height,
+        work_balance_infos_,
+        i,
+        overscan);
 
-    const BufferParams slice_params = slice_buffer_params(scaled_big_tile_params,
-                                                          render_work.resolution_divider,
-                                                          full_res_window_height,
-                                                          work_balance_infos_,
-                                                          i,
-                                                          scaled_overscan);
+    const BufferParams slice_params = slice_buffer_params(
+        scaled_big_tile_params,
+        match_render_res ? 1.0f : render_work.resolution_divider,
+        full_res_window_height,
+        work_balance_infos_,
+        i,
+        scaled_overscan);
 
     path_trace_works_[i]->set_effective_buffer_params(
         scaled_big_tile_params, slice_params, denoised_big_tile_params, denoised_slice_params);
@@ -772,6 +827,15 @@ void PathTrace::flush_display()
   }
 
   display_->flush();
+}
+
+void PathTrace::set_display_params(const BufferParams &buffer_params)
+{
+  if (!display_) {
+    return;
+  }
+
+  display_->set_display_params(buffer_params);
 }
 
 void PathTrace::update_display(const RenderWork &render_work)

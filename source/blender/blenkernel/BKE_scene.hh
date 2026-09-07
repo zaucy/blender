@@ -282,6 +282,7 @@ int BKE_render_num_threads(const RenderData *r);
 
 void BKE_render_resolution(const RenderData *r, const bool use_crop, int *r_width, int *r_height);
 int BKE_render_preview_pixel_size(const RenderData *r);
+bool BKE_render_is_preview_render_resolution(const RenderData *r);
 
 /**********************************/
 

@@ -112,7 +112,9 @@ class BlenderSync {
                                         blender::RegionView3D *b_rv3d,
                                         Camera *cam,
                                         const int width,
-                                        const int height);
+                                        const int height,
+                                        const blender::Scene *b_scene = nullptr,
+                                        const blender::Depsgraph *b_depsgraph = nullptr);
 
   static DenoiseParams get_denoise_params(blender::Scene &b_scene,
                                           blender::ViewLayer *b_view_layer,

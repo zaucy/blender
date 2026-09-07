@@ -915,7 +915,6 @@ class RENDER_PT_eevee_performance_memory(RenderButtonsPanel, Panel):
 class RENDER_PT_eevee_performance_viewport(RenderButtonsPanel, Panel):
     bl_label = "Viewport"
     bl_parent_id = "RENDER_PT_eevee_performance"
-    bl_options = {'DEFAULT_CLOSED'}
     COMPAT_ENGINES = {'BLENDER_EEVEE'}
 
     @classmethod

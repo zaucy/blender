@@ -21,9 +21,10 @@ CCL_NAMESPACE_BEGIN
 RenderScheduler::RenderScheduler(TileManager &tile_manager, const SessionParams &params)
     : headless_(params.headless),
       background_(params.background),
-      pixel_size_(params.pixel_size),
+      pixel_size_(params.pixel_size > 0 ? params.pixel_size : 1),
       tile_manager_(tile_manager),
-      default_start_resolution_divider_(params.use_resolution_divider ? pixel_size_ * 8 : 0)
+      default_start_resolution_divider_(
+          (params.use_resolution_divider && params.pixel_size > 0) ? pixel_size_ * 8 : 0)
 {
   use_progressive_noise_floor_ = !background_;
 }

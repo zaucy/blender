@@ -248,6 +248,35 @@ void Camera::sync()
     data.uv_scale = float2(1.0f);
     data.uv_bias = float2(0.0f);
   }
+  else if (inst_.is_viewport() && inst_.rv3d && inst_.rv3d->persp == RV3D_CAMOB &&
+           camera_eval && camera_eval->type == OB_CAMERA &&
+           BKE_render_is_preview_render_resolution(&inst_.scene->r))
+  {
+    CameraParams params;
+    BKE_camera_params_init(&params);
+    BKE_camera_params_from_object(&params, camera_eval);
+
+    int render_width = 0, render_height = 0;
+    BKE_render_resolution(&inst_.scene->r, false, &render_width, &render_height);
+    render_width = max_ii(1, render_width);
+    render_height = max_ii(1, render_height);
+
+    BKE_camera_params_compute_viewplane(
+        &params, render_width, render_height, inst_.scene->r.xasp, inst_.scene->r.yasp);
+    BKE_camera_params_compute_matrix(&params);
+
+    data.winmat = float4x4(params.winmat);
+    data.viewinv = camera_eval->object_to_world();
+    data.viewmat = math::invert(data.viewinv);
+
+    if (overscan_ != 0.0f) {
+      int2 active_extent(render_width, render_height);
+      data.winmat = projection_overscan_matrix(active_extent, int2(film_overscan)) * data.winmat;
+    }
+
+    data.uv_scale = float2(1.0f);
+    data.uv_bias = float2(0.0f);
+  }
   else if (inst_.drw_view) {
     data.viewmat = inst_.drw_view->viewmat();
     data.viewinv = inst_.drw_view->viewinv();
@@ -255,6 +284,51 @@ void Camera::sync()
 
     if (film_offset != int2(0) || film_extent != display_extent) {
       data.winmat = projection_crop_matrix(film_offset, film_extent, display_extent) * data.winmat;
+    }
+
+    if (inst_.is_viewport() && BKE_render_is_preview_render_resolution(&inst_.scene->r) &&
+        inst_.rv3d && inst_.rv3d->persp != RV3D_CAMOB && inst_.v3d)
+    {
+      int target_res_x = 0, target_res_y = 0;
+      BKE_camera_preview_render_resolution_calc(inst_.scene,
+                                                inst_.depsgraph,
+                                                inst_.v3d,
+                                                inst_.rv3d,
+                                                display_extent.x,
+                                                display_extent.y,
+                                                &target_res_x,
+                                                &target_res_y);
+      float phase_x = 0.0f, phase_y = 0.0f;
+      float delta_view_x = 0.0f, delta_view_y = 0.0f;
+      float pixel_world_x = 0.0f, pixel_world_y = 0.0f;
+      if (BKE_camera_preview_render_subpixel_phase_calc(inst_.scene,
+                                                        inst_.depsgraph,
+                                                        inst_.v3d,
+                                                        inst_.rv3d,
+                                                        display_extent.x,
+                                                        display_extent.y,
+                                                        target_res_x,
+                                                        target_res_y,
+                                                        &phase_x,
+                                                        &phase_y,
+                                                        &delta_view_x,
+                                                        &delta_view_y,
+                                                        &pixel_world_x,
+                                                        &pixel_world_y))
+      {
+        /* Snap the view matrix so 3D geometry is strictly locked to the simulated pixel grid. */
+        data.viewmat[3][0] -= delta_view_x;
+        data.viewmat[3][1] -= delta_view_y;
+        data.viewinv = math::invert(data.viewmat);
+
+        if (inst_.rv3d->persp == RV3D_ORTHO && pixel_world_x > 1e-6f && pixel_world_y > 1e-6f) {
+          const float locked_w = float(target_res_x) * pixel_world_x;
+          const float locked_h = float(target_res_y) * pixel_world_y;
+          data.winmat[0][0] = 2.0f / locked_w;
+          data.winmat[1][1] = 2.0f / locked_h;
+          data.wininv = math::invert(data.winmat);
+        }
+      }
     }
 
     if (overscan_ != 0.0f) {

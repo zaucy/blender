@@ -16,6 +16,7 @@
 #include "BLI_rect.hh"
 #include "BLI_set.hh"
 
+#include "BKE_camera.h"
 #include "BKE_compositor.hh"
 #include "BKE_scene.hh"
 
@@ -185,7 +186,8 @@ inline bool operator==(const FilmData &a, const FilmData &b)
   return (a.extent == b.extent) && (a.offset == b.offset) &&
          (a.render_extent == b.render_extent) && (a.overscan == b.overscan) &&
          (a.filter_radius == b.filter_radius) && (a.scaling_factor == b.scaling_factor) &&
-         (a.background_opacity == b.background_opacity);
+         (a.background_opacity == b.background_opacity) &&
+         (a.camera_border_frame == b.camera_border_frame);
 }
 
 inline bool operator!=(const FilmData &a, const FilmData &b)
@@ -364,7 +366,12 @@ void Film::init(const int2 &extent, const rcti *output_rect)
       data_.scaling_factor = BKE_render_preview_pixel_size(&inst_.scene->r);
     }
     /* Sharpen the LODs (1.5x) to avoid TAA filtering causing over-blur (see #122941). */
-    data_.texture_lod_bias = 1.0f / (data_.scaling_factor * 1.5f);
+    if (data_.scaling_factor > 0) {
+      data_.texture_lod_bias = 1.0f / (data_.scaling_factor * 1.5f);
+    }
+    else {
+      data_.texture_lod_bias = 0.0f;
+    }
   }
   {
     rcti fallback_rect;
@@ -378,7 +385,70 @@ void Film::init(const int2 &extent, const rcti *output_rect)
     data_.extent = int2(BLI_rcti_size_x(output_rect), BLI_rcti_size_y(output_rect));
     data_.offset = int2(output_rect->xmin, output_rect->ymin);
     data_.extent_inv = 1.0f / float2(data_.extent);
-    data_.render_extent = divide_ceil(data_.extent, int2(data_.scaling_factor));
+    if (data_.scaling_factor == SCE_PREVIEW_PIXEL_SIZE_RENDER) {
+      int target_res_x = 0;
+      int target_res_y = 0;
+      BKE_camera_preview_render_resolution_calc(inst_.scene,
+                                                inst_.depsgraph,
+                                                inst_.v3d,
+                                                inst_.rv3d,
+                                                data_.extent.x,
+                                                data_.extent.y,
+                                                &target_res_x,
+                                                &target_res_y);
+      data_.render_extent = int2(max_ii(1, target_res_x), max_ii(1, target_res_y));
+    }
+    else {
+      data_.render_extent = divide_ceil(data_.extent, int2(data_.scaling_factor));
+    }
+
+    if (inst_.is_viewport() && inst_.rv3d && inst_.rv3d->persp == RV3D_CAMOB &&
+        data_.scaling_factor == SCE_PREVIEW_PIXEL_SIZE_RENDER && inst_.v3d && inst_.v3d->camera)
+    {
+      const rctf cam_border = BKE_camera_view_border(
+          inst_.scene, inst_.depsgraph, inst_.v3d, inst_.rv3d, extent.x, extent.y, false, false, false);
+      data_.camera_border_frame = float4(
+          cam_border.xmin,
+          cam_border.ymin,
+          max_ff(1e-4f, BLI_rctf_size_x(&cam_border)),
+          max_ff(1e-4f, BLI_rctf_size_y(&cam_border)));
+    }
+    else if (inst_.is_viewport() && data_.scaling_factor == SCE_PREVIEW_PIXEL_SIZE_RENDER &&
+             inst_.rv3d && inst_.v3d)
+    {
+      float phase_x = 0.0f, phase_y = 0.0f;
+      float delta_view_x = 0.0f, delta_view_y = 0.0f;
+      float pixel_world_x = 0.0f, pixel_world_y = 0.0f;
+      float quad_x = 0.0f, quad_y = 0.0f;
+      float quad_w = float(data_.extent.x), quad_h = float(data_.extent.y);
+      BKE_camera_preview_render_subpixel_phase_calc(inst_.scene,
+                                                    inst_.depsgraph,
+                                                    inst_.v3d,
+                                                    inst_.rv3d,
+                                                    data_.extent.x,
+                                                    data_.extent.y,
+                                                    data_.render_extent.x,
+                                                    data_.render_extent.y,
+                                                    &phase_x,
+                                                    &phase_y,
+                                                    &delta_view_x,
+                                                    &delta_view_y,
+                                                    &pixel_world_x,
+                                                    &pixel_world_y,
+                                                    &quad_x,
+                                                    &quad_y,
+                                                    &quad_w,
+                                                    &quad_h);
+      data_.camera_border_frame = float4(
+          float(data_.offset.x) + quad_x,
+          float(data_.offset.y) + quad_y,
+          quad_w,
+          quad_h);
+    }
+    else {
+      data_.camera_border_frame = float4(
+          float(data_.offset.x), float(data_.offset.y), float(data_.extent.x), float(data_.extent.y));
+    }
     data_.overscan = overscan_pixels_get(inst_.camera.overscan(), data_.render_extent);
     data_.render_extent += data_.overscan * 2;
 
@@ -408,11 +478,11 @@ void Film::init(const int2 &extent, const rcti *output_rect)
     }
 
     data_.filter_radius = clamp_f(scene.r.gauss, 0.0f, 100.0f);
-    if (sampling.sample_count() == 1) {
-      /* Disable filtering if sample count is 1. */
+    if (sampling.sample_count() == 1 || data_.scaling_factor < 0) {
+      /* Disable filtering if sample count is 1 or in render resolution mode (pixel art). */
       data_.filter_radius = 0.0f;
     }
-    if (data_.scaling_factor > 1) {
+    else if (data_.scaling_factor > 1) {
       /* Fixes issue when using scaling factor and no filtering.
        * Without this, the filter becomes a dirac and samples gets only the fallback weight.
        * This results in a box blur instead of no filtering. */
@@ -731,6 +801,10 @@ void Film::end_sync()
 
 float2 Film::pixel_jitter_get() const
 {
+  if (data_.scaling_factor < 0) {
+    return float2(0.0f);
+  }
+
   float2 jitter = inst_.sampling.rng_2d_get(SAMPLING_FILTER_U);
 
   if (!use_box_filter && data_.filter_radius < M_SQRT1_2 && !inst_.camera.is_panoramic() &&
@@ -804,9 +878,8 @@ void Film::update_sample_table()
   }
 
   data_.samples_len = 0;
-  if (inst_.camera.is_panoramic()) {
-    /* TODO(fclem): Proper filtering instead of a single nearest sample. A 3x3 or plus-shape
-     * 5-sample kernel would reduce aliasing quite a lot. */
+  if (inst_.camera.is_panoramic() || data_.scaling_factor < 0) {
+    /* Single nearest sample without filtering. */
     data_.samples[0].texel = int2(0, 0);
     data_.samples[0].weight = 1.0f;
     data_.samples_weight_total = 1.0f;

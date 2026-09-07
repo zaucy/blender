@@ -139,6 +139,36 @@ bool BKE_camera_view_render_border(const struct Scene *scene,
                                    rctf *r_border,
                                    rctf *r_unrolled_border);
 
+/** Calculate preview resolution when matching render resolution in camera or free view. */
+bool BKE_camera_preview_render_resolution_calc(const struct Scene *scene,
+                                               const struct Depsgraph *depsgraph,
+                                               const struct View3D *v3d,
+                                               const struct RegionView3D *rv3d,
+                                               int winx,
+                                               int winy,
+                                               int *r_target_x,
+                                               int *r_target_y);
+
+/** Calculate subpixel phase alignment to lock the simulated pixel grid to the 3D world anchor. */
+bool BKE_camera_preview_render_subpixel_phase_calc(const struct Scene *scene,
+                                                   const struct Depsgraph *depsgraph,
+                                                   const struct View3D *v3d,
+                                                   const struct RegionView3D *rv3d,
+                                                   int winx,
+                                                   int winy,
+                                                   int target_x,
+                                                   int target_y,
+                                                   float *r_phase_x,
+                                                   float *r_phase_y,
+                                                   float *r_delta_view_x = nullptr,
+                                                   float *r_delta_view_y = nullptr,
+                                                   float *r_pixel_world_x = nullptr,
+                                                   float *r_pixel_world_y = nullptr,
+                                                   float *r_quad_x = nullptr,
+                                                   float *r_quad_y = nullptr,
+                                                   float *r_quad_w = nullptr,
+                                                   float *r_quad_h = nullptr);
+
 /* Camera View Frame */
 
 void BKE_camera_view_frame_ex(const struct Scene *scene,

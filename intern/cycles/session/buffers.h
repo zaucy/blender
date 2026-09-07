@@ -85,6 +85,19 @@ class BufferParams : public Node {
   int full_width = 0;
   int full_height = 0;
 
+  /* Target resolution when matching preview render resolution.
+   * If non-zero, effective buffer is scaled to this resolution. */
+  int target_width = 0;
+  int target_height = 0;
+
+  /* Display rectangle in viewport pixels for drawing the quad in the display driver.
+   * If display_width and display_height are > 0, the quad is drawn at (display_x, display_y)
+   * with size (display_width, display_height). */
+  int display_x = 0;
+  int display_y = 0;
+  int display_width = 0;
+  int display_height = 0;
+
   /* Runtime fields, only valid after `update_passes()` or `update_offset_stride()`. */
   int offset = -1, stride = -1;
 
@@ -134,6 +147,7 @@ class BufferParams : public Node {
   void update_offset_stride();
 
   bool modified(const BufferParams &other) const;
+  bool display_modified(const BufferParams &other) const;
 
  protected:
   void reset_pass_offset();

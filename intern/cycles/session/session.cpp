@@ -409,8 +409,26 @@ RenderWork Session::run_update_for_next_iteration()
      * knows nothing about progressive or cropped rendering, it just gets the
      * image dimensions passed in. */
     const float resolution = render_work.resolution_divider;
-    const int width = max(1, int(buffer_params_.full_width / resolution));
-    const int height = max(1, int(buffer_params_.full_height / resolution));
+    int width = max(1, int(buffer_params_.full_width / resolution));
+    int height = max(1, int(buffer_params_.full_height / resolution));
+
+    if (buffer_params_.target_width > 0 && buffer_params_.target_height > 0) {
+      if (buffer_params_.window_width == buffer_params_.target_width &&
+          buffer_params_.window_height == buffer_params_.target_height)
+      {
+        width = buffer_params_.target_width;
+        height = buffer_params_.target_height;
+      }
+      else {
+        const float eff_divider = max(1.0f, resolution);
+        const int target_w = max(1, int(buffer_params_.target_width / eff_divider));
+        const int target_h = max(1, int(buffer_params_.target_height / eff_divider));
+        const float scale_x = float(target_w) / float(max(1, buffer_params_.window_width));
+        const float scale_y = float(target_h) / float(max(1, buffer_params_.window_height));
+        width = max(1, int(buffer_params_.full_width * scale_x));
+        height = max(1, int(buffer_params_.full_height * scale_y));
+      }
+    }
 
     scene->update_camera_resolution(progress, width, height);
 
@@ -668,6 +686,11 @@ void Session::set_output_driver(unique_ptr<OutputDriver> driver)
 void Session::set_display_driver(unique_ptr<DisplayDriver> driver)
 {
   path_trace_->set_display_driver(std::move(driver));
+}
+
+void Session::set_display_params(const BufferParams &buffer_params)
+{
+  path_trace_->set_display_params(buffer_params);
 }
 
 double Session::get_estimated_remaining_time() const

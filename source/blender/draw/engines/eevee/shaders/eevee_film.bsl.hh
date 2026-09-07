@@ -291,6 +291,19 @@ struct Film {
 
     FilmSample film_sample = uni.uniform_buf.film.samples[sample_n];
 
+    if (scaling_factor < 0) {
+      int2 active_render_extent = uni.uniform_buf.film.render_extent - int2(uni.uniform_buf.film.overscan * 2);
+      float2 screen_co = float2(texel_film + uni.uniform_buf.film.offset) + float2(0.5f);
+      float4 border_frame = uni.uniform_buf.film.camera_border_frame;
+      float2 uv = (screen_co - border_frame.xy) / border_frame.zw;
+      film_sample.texel = int2(floor(uv * float2(active_render_extent))) +
+                          int2(uni.uniform_buf.film.overscan);
+      film_sample.texel = clamp(
+          film_sample.texel, int2(0, 0), uni.uniform_buf.film.render_extent - 1);
+      film_sample.weight = 1.0f;
+      return film_sample;
+    }
+
     if (scaling_factor > 1) {
       /* We are working in the render pixel region on the film. We use film pixel units. */
 

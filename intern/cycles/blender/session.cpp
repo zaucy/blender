@@ -4,6 +4,7 @@
 
 #include <cstdlib>
 
+#include "BKE_camera.h"
 #include "DEG_depsgraph_query.hh"
 #include "DNA_screen_types.h"
 #include "DNA_space_types.h"
@@ -151,7 +152,7 @@ void BlenderSession::create_session()
 
   /* set buffer parameters */
   const BufferParams buffer_params = BlenderSync::get_buffer_params(
-      b_v3d, b_rv3d, scene->camera, width, height);
+      b_v3d, b_rv3d, scene->camera, width, height, b_scene, b_depsgraph);
   session->reset(session_params, buffer_params);
 
   /* Viewport and preview (as in, material preview) does not do tiled rendering, so can inform
@@ -355,7 +356,7 @@ void BlenderSession::render(blender::Depsgraph &b_depsgraph_)
   const SessionParams session_params = BlenderSync::get_session_params(
       b_engine, b_userpref, *b_scene, background, pixelsize);
   BufferParams buffer_params = BlenderSync::get_buffer_params(
-      b_v3d, b_rv3d, scene->camera, width, height);
+      b_v3d, b_rv3d, scene->camera, width, height, b_scene, b_depsgraph);
 
   /* temporary render result to find needed passes and views */
   blender::RenderResult *b_rr = RE_engine_begin_result(
@@ -832,7 +833,7 @@ void BlenderSession::synchronize(blender::Depsgraph &b_depsgraph_)
 
   /* get buffer parameters */
   const BufferParams buffer_params = BlenderSync::get_buffer_params(
-      b_v3d, b_rv3d, scene->camera, width, height);
+      b_v3d, b_rv3d, scene->camera, width, height, b_scene, b_depsgraph);
 
   /* reset if needed */
   if (scene->need_reset()) {
@@ -957,7 +958,7 @@ void BlenderSession::view_draw(const int w, const int h)
       const SessionParams session_params = BlenderSync::get_session_params(
           b_engine, b_userpref, *b_scene, background, pixelsize);
       const BufferParams buffer_params = BlenderSync::get_buffer_params(
-          b_v3d, b_rv3d, scene->camera, width, height);
+          b_v3d, b_rv3d, scene->camera, width, height, b_scene, b_depsgraph);
       if (view_paused == false) {
         session->reset(session_params, buffer_params);
         start_resize_time = 0.0;
@@ -966,6 +967,62 @@ void BlenderSession::view_draw(const int w, const int h)
   }
   else {
     tag_update();
+  }
+
+  /* Always update display params if in render resolution preview mode, so viewport pan/zoom
+   * updates the quad smoothly without resetting or altering camera rays. */
+  if (b_scene && b_scene->r.preview_pixel_size == blender::SCE_PREVIEW_PIXEL_SIZE_RENDER) {
+    BufferParams display_params;
+    if (b_rv3d && b_rv3d->persp == blender::RV3D_CAMOB && b_v3d && b_v3d->camera && b_depsgraph) {
+      const blender::rctf camera_border = blender::BKE_camera_view_border(
+          b_scene, b_depsgraph, b_v3d, b_rv3d, w, h, false, false, false);
+      display_params.display_x = int(roundf(camera_border.xmin));
+      display_params.display_y = int(roundf(camera_border.ymin));
+      display_params.display_width = max(1, int(roundf(camera_border.xmax - camera_border.xmin)));
+      display_params.display_height = max(1, int(roundf(camera_border.ymax - camera_border.ymin)));
+    }
+    else {
+      int target_x = 0, target_y = 0;
+      blender::BKE_camera_preview_render_resolution_calc(
+          b_scene, b_depsgraph, b_v3d, b_rv3d, w, h, &target_x, &target_y);
+      float phase_x = 0.0f, phase_y = 0.0f;
+      float delta_view_x = 0.0f, delta_view_y = 0.0f;
+      float pixel_world_x = 0.0f, pixel_world_y = 0.0f;
+      float quad_x = 0.0f, quad_y = 0.0f;
+      float quad_w = float(w), quad_h = float(h);
+      if (b_v3d && b_rv3d && b_depsgraph) {
+        blender::BKE_camera_preview_render_subpixel_phase_calc(
+            b_scene,
+            b_depsgraph,
+            b_v3d,
+            b_rv3d,
+            w,
+            h,
+            target_x,
+            target_y,
+            &phase_x,
+            &phase_y,
+            &delta_view_x,
+            &delta_view_y,
+            &pixel_world_x,
+            &pixel_world_y,
+            &quad_x,
+            &quad_y,
+            &quad_w,
+            &quad_h);
+      }
+      display_params.display_x = int(roundf(quad_x));
+      display_params.display_y = int(roundf(quad_y));
+      display_params.display_width = max(1, int(roundf(quad_w)));
+      display_params.display_height = max(1, int(roundf(quad_h)));
+    }
+    session->set_display_params(display_params);
+  }
+  else {
+    BufferParams display_params;
+    display_params.display_width = 0;
+    display_params.display_height = 0;
+    session->set_display_params(display_params);
   }
 
   /* update status and progress for 3d view draw */

@@ -148,6 +148,7 @@ class Session {
 
   void set_output_driver(unique_ptr<OutputDriver> driver);
   void set_display_driver(unique_ptr<DisplayDriver> driver);
+  void set_display_params(const BufferParams &buffer_params);
 
   double get_estimated_remaining_time() const;
 

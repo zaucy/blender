@@ -24,10 +24,33 @@ void PathTraceDisplay::reset(const BufferParams &buffer_params, const bool reset
   params_.full_size = make_int2(buffer_params.full_width, buffer_params.full_height);
   params_.size = make_int2(buffer_params.window_width, buffer_params.window_height);
 
+  if (buffer_params.display_width > 0 && buffer_params.display_height > 0) {
+    params_.display_offset = make_int2(buffer_params.display_x, buffer_params.display_y);
+    params_.display_size = make_int2(buffer_params.display_width, buffer_params.display_height);
+  }
+  else {
+    params_.display_offset = make_int2(0, 0);
+    params_.display_size = make_int2(0, 0);
+  }
+
   texture_state_.is_outdated = true;
 
   if (!reset_rendering) {
     driver_->next_tile_begin();
+  }
+}
+
+void PathTraceDisplay::set_display_params(const BufferParams &buffer_params)
+{
+  const thread_scoped_lock lock(mutex_);
+
+  if (buffer_params.display_width > 0 && buffer_params.display_height > 0) {
+    params_.display_offset = make_int2(buffer_params.display_x, buffer_params.display_y);
+    params_.display_size = make_int2(buffer_params.display_width, buffer_params.display_height);
+  }
+  else {
+    params_.display_offset = make_int2(0, 0);
+    params_.display_size = make_int2(0, 0);
   }
 }
 

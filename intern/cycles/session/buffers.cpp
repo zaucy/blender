@@ -239,6 +239,10 @@ bool BufferParams::modified(const BufferParams &other) const
     return true;
   }
 
+  if (target_width != other.target_width || target_height != other.target_height) {
+    return true;
+  }
+
   if (offset != other.offset || stride != other.stride || pass_stride != other.pass_stride) {
     return true;
   }
@@ -255,6 +259,12 @@ bool BufferParams::modified(const BufferParams &other) const
   }
 
   return !(passes == other.passes);
+}
+
+bool BufferParams::display_modified(const BufferParams &other) const
+{
+  return display_x != other.display_x || display_y != other.display_y ||
+         display_width != other.display_width || display_height != other.display_height;
 }
 
 /* --------------------------------------------------------------------

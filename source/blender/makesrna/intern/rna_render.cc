@@ -883,7 +883,7 @@ static void rna_def_render_engine(BlenderRNA *brna)
                                   "Get the pixel size that should be used for preview rendering");
   parm = RNA_def_pointer(func, "scene", "Scene", "", "Scene whose preview settings are used");
   RNA_def_parameter_flags(parm, PropertyFlag(0), PARM_REQUIRED);
-  parm = RNA_def_int(func, "pixel_size", 0, 1, 8, "Pixel Size", "", 1, 8);
+  parm = RNA_def_int(func, "pixel_size", 0, -1, 8, "Pixel Size", "", -1, 8);
   RNA_def_function_return(func, parm);
 
   func = RNA_def_function(srna, "free_blender_memory", "RE_engine_free_blender_memory");

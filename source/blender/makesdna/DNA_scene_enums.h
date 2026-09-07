@@ -256,4 +256,15 @@ enum eStereoViews : char {
   STEREO_MONO_ID = 3,
 };
 
+/** #RenderData::preview_pixel_size */
+enum ePreviewPixelSize : short {
+  SCE_PREVIEW_PIXEL_SIZE_RENDER = -1,
+  SCE_PREVIEW_PIXEL_SIZE_AUTO = 0,
+  SCE_PREVIEW_PIXEL_SIZE_1 = 1,
+  SCE_PREVIEW_PIXEL_SIZE_2 = 2,
+  SCE_PREVIEW_PIXEL_SIZE_4 = 4,
+  SCE_PREVIEW_PIXEL_SIZE_8 = 8,
+};
+
 }  // namespace blender
+

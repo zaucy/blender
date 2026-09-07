@@ -3187,6 +3187,11 @@ int BKE_render_preview_pixel_size(const RenderData *r)
   return r->preview_pixel_size;
 }
 
+bool BKE_render_is_preview_render_resolution(const RenderData *r)
+{
+  return r->preview_pixel_size == SCE_PREVIEW_PIXEL_SIZE_RENDER;
+}
+
 /******************** multiview *************************/
 
 int BKE_scene_multiview_num_views_get(const RenderData *rd)

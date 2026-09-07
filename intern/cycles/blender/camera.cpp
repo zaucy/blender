@@ -992,6 +992,13 @@ static void blender_camera_from_view(BlenderCamera *bcam,
         bcam->pano_viewplane = view_box.make_relative_to(cam_box);
         bcam->pano_aspectratio = view_aspect;
       }
+      else if (b_scene.r.preview_pixel_size == blender::SCE_PREVIEW_PIXEL_SIZE_RENDER) {
+        bcam->zoom = 1.0f;
+        bcam->offset = make_float2(0.0f, 0.0f);
+        bcam->full_width = bcam->render_width;
+        bcam->full_height = bcam->render_height;
+        bcam->border = BoundBox2D(BoundBox2D::full);
+      }
       else {
         /* magic zoom formula */
         bcam->zoom = b_rv3d->camzoom;
@@ -1026,14 +1033,22 @@ static void blender_camera_from_view(BlenderCamera *bcam,
     bcam->ortho_scale = b_rv3d->dist * sensor_size / b_v3d->lens;
   }
 
-  bcam->zoom *= 2.0f;
-
   /* 3d view transform */
   bcam->matrix = transform_inverse(get_transform(blender::float4x4(b_rv3d->viewmat)));
 
-  /* dimensions */
-  bcam->full_width = width;
-  bcam->full_height = height;
+  if (b_scene.r.preview_pixel_size == blender::SCE_PREVIEW_PIXEL_SIZE_RENDER &&
+      b_rv3d->persp == blender::RV3D_CAMOB)
+  {
+    bcam->zoom = 1.0f;
+    bcam->offset = make_float2(0.0f, 0.0f);
+    bcam->full_width = bcam->render_width;
+    bcam->full_height = bcam->render_height;
+  }
+  else {
+    bcam->zoom *= 2.0f;
+    bcam->full_width = width;
+    bcam->full_height = height;
+  }
 }
 
 static void blender_camera_view_subset(blender::RenderEngine &b_engine,
@@ -1131,7 +1146,50 @@ void BlenderSync::sync_view(const blender::Depsgraph *b_depsgraph,
   bcam.motion_steps = scene->need_motion() == Scene::MOTION_PASS_INTERACTIVE ? 2 : 0;
   blender::PointerRNA scene_rna_ptr = RNA_id_pointer_create(&b_scene->id);
   blender::PointerRNA cscene = RNA_pointer_get(&scene_rna_ptr, "cycles");
-  blender_camera_sync(scene->camera, scene, &bcam, width, height, "", &cscene);
+  if (b_render_settings.preview_pixel_size == blender::SCE_PREVIEW_PIXEL_SIZE_RENDER) {
+    int target_w = 0, target_h = 0;
+    if (b_rv3d && b_rv3d->persp == blender::RV3D_CAMOB) {
+      blender::BKE_render_resolution(&b_scene->r, false, &target_w, &target_h);
+    }
+    else {
+      blender::BKE_camera_preview_render_resolution_calc(
+          b_scene, b_depsgraph, b_v3d, b_rv3d, width, height, &target_w, &target_h);
+      float phase_x = 0.0f, phase_y = 0.0f;
+      float delta_view_x = 0.0f, delta_view_y = 0.0f;
+      float pixel_world_x = 0.0f, pixel_world_y = 0.0f;
+      if (blender::BKE_camera_preview_render_subpixel_phase_calc(b_scene,
+                                                                 b_depsgraph,
+                                                                 b_v3d,
+                                                                 b_rv3d,
+                                                                 width,
+                                                                 height,
+                                                                 target_w,
+                                                                 target_h,
+                                                                 &phase_x,
+                                                                 &phase_y,
+                                                                 &delta_view_x,
+                                                                 &delta_view_y,
+                                                                 &pixel_world_x,
+                                                                 &pixel_world_y))
+      {
+        /* Snap the camera matrix in camera space so Cycles rays are strictly locked to the simulated pixel grid. */
+        bcam.matrix = bcam.matrix * transform_translate(delta_view_x, delta_view_y, 0.0f);
+        if (b_rv3d->persp == blender::RV3D_ORTHO && pixel_world_x > 1e-6f) {
+          const bool horizontal_fit = blender_camera_horizontal_fit(&bcam, target_w, target_h);
+          const float locked_extent = horizontal_fit ? (float(target_w) * pixel_world_x) :
+                                                       (float(target_h) * pixel_world_y);
+          bcam.ortho_scale = locked_extent / bcam.zoom;
+        }
+      }
+    }
+    target_w = max(1, target_w);
+    target_h = max(1, target_h);
+    bcam.border = BoundBox2D(BoundBox2D::full);
+    blender_camera_sync(scene->camera, scene, &bcam, target_w, target_h, "", &cscene);
+  }
+  else {
+    blender_camera_sync(scene->camera, scene, &bcam, width, height, "", &cscene);
+  }
 
   /* dicing camera */
   blender::Object *b_ob = RNA_pointer_get(&cscene, "dicing_camera").data_as<blender::Object>();
@@ -1154,7 +1212,9 @@ BufferParams BlenderSync::get_buffer_params(blender::View3D *b_v3d,
                                             blender::RegionView3D *b_rv3d,
                                             Camera *cam,
                                             const int width,
-                                            const int height)
+                                            const int height,
+                                            const blender::Scene *b_scene,
+                                            const blender::Depsgraph *b_depsgraph)
 {
   BufferParams params;
   bool use_border = false;
@@ -1190,6 +1250,69 @@ BufferParams BlenderSync::get_buffer_params(blender::View3D *b_v3d,
 
   params.window_width = params.width;
   params.window_height = params.height;
+
+  if (b_scene && b_scene->r.preview_pixel_size == blender::SCE_PREVIEW_PIXEL_SIZE_RENDER) {
+    int target_x = 0;
+    int target_y = 0;
+    if (blender::BKE_camera_preview_render_resolution_calc(
+            b_scene, b_depsgraph, b_v3d, b_rv3d, params.width, params.height, &target_x, &target_y))
+    {
+      params.target_width = max(1, target_x);
+      params.target_height = max(1, target_y);
+    }
+
+    params.full_x = 0;
+    params.full_y = 0;
+    params.full_width = params.target_width;
+    params.full_height = params.target_height;
+    params.width = params.target_width;
+    params.height = params.target_height;
+    params.window_x = 0;
+    params.window_y = 0;
+    params.window_width = params.target_width;
+    params.window_height = params.target_height;
+
+    if (b_rv3d && b_rv3d->persp == blender::RV3D_CAMOB && b_v3d && b_v3d->camera && b_depsgraph) {
+      const blender::rctf camera_border = blender::BKE_camera_view_border(
+          b_scene, b_depsgraph, b_v3d, b_rv3d, width, height, false, false, false);
+      params.display_x = int(roundf(camera_border.xmin));
+      params.display_y = int(roundf(camera_border.ymin));
+      params.display_width = max(1, int(roundf(camera_border.xmax - camera_border.xmin)));
+      params.display_height = max(1, int(roundf(camera_border.ymax - camera_border.ymin)));
+    }
+    else {
+      float phase_x = 0.0f, phase_y = 0.0f;
+      float delta_view_x = 0.0f, delta_view_y = 0.0f;
+      float pixel_world_x = 0.0f, pixel_world_y = 0.0f;
+      float quad_x = 0.0f, quad_y = 0.0f;
+      float quad_w = float(width), quad_h = float(height);
+      if (b_v3d && b_rv3d && b_depsgraph) {
+        blender::BKE_camera_preview_render_subpixel_phase_calc(
+            b_scene,
+            b_depsgraph,
+            b_v3d,
+            b_rv3d,
+            width,
+            height,
+            params.target_width,
+            params.target_height,
+            &phase_x,
+            &phase_y,
+            &delta_view_x,
+            &delta_view_y,
+            &pixel_world_x,
+            &pixel_world_y,
+            &quad_x,
+            &quad_y,
+            &quad_w,
+            &quad_h);
+      }
+      params.display_x = int(roundf(quad_x));
+      params.display_y = int(roundf(quad_y));
+      params.display_width = max(1, int(roundf(quad_w)));
+      params.display_height = max(1, int(roundf(quad_h)));
+    }
+  }
 
   return params;
 }

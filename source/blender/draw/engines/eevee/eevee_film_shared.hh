@@ -135,6 +135,8 @@ struct [[host_shared]] FilmData {
   float samples_weight_total;
   int _pad0;
   struct FilmSample samples[FILM_PRECOMP_SAMPLE_MAX];
+  /** Bounds of the camera frame in display pixel coordinates (xmin, ymin, width, height). */
+  float4 camera_border_frame;
 };
 
 static inline float film_filter_weight(float filter_radius, float sample_distance_sqr)

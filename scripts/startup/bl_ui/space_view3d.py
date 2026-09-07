@@ -7051,6 +7051,26 @@ class VIEW3D_PT_shading_compositor(Panel):
         row.prop(shading, "use_compositor", expand=True)
 
 
+class VIEW3D_PT_shading_performance(Panel):
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'HEADER'
+    bl_label = "Performance"
+    bl_parent_id = "VIEW3D_PT_shading"
+    bl_order = 15
+
+    @classmethod
+    def poll(cls, context):
+        return context.space_data.shading.type in {'MATERIAL', 'RENDERED'}
+
+    def draw(self, context):
+        layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+        rd = context.scene.render
+        col = layout.column()
+        col.prop(rd, "preview_pixel_size", text="Pixel Size")
+
+
 class VIEW3D_PT_gizmo_display(Panel):
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'HEADER'
@@ -9497,6 +9517,7 @@ classes = (
     VIEW3D_PT_shading_cavity,
     VIEW3D_PT_shading_render_pass,
     VIEW3D_PT_shading_compositor,
+    VIEW3D_PT_shading_performance,
     VIEW3D_PT_gizmo_display,
     VIEW3D_PT_overlay,
     VIEW3D_PT_overlay_guides,

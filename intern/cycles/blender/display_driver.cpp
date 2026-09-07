@@ -445,8 +445,9 @@ bool BlenderDisplayDriver::update_begin(const Params &params,
    * sending too much data to blender::GPU when resolution divider is not 1. */
   /* TODO(sergey): Investigate whether keeping the PBO exact size of the texture makes non-interop
    * mode faster. */
-  const int buffer_width = params.size.x;
-  const int buffer_height = params.size.y;
+  const bool use_display_rect = (params.display_size.x > 0 && params.display_size.y > 0);
+  const int buffer_width = use_display_rect ? params.size.x : max(params.size.x, texture_width);
+  const int buffer_height = use_display_rect ? params.size.y : max(params.size.y, texture_height);
   bool interop_recreated = false;
 
   if (!current_tile_buffer_object.gpu_resources_ensure(
@@ -652,11 +653,12 @@ static void vertex_draw(const DisplayDriver::Params &params,
                         const int texcoord_attribute,
                         const int position_attribute)
 {
-  const int x = params.full_offset.x;
-  const int y = params.full_offset.y;
+  const bool use_display_rect = (params.display_size.x > 0 && params.display_size.y > 0);
+  const int x = use_display_rect ? params.display_offset.x : params.full_offset.x;
+  const int y = use_display_rect ? params.display_offset.y : params.full_offset.y;
 
-  const int width = params.size.x;
-  const int height = params.size.y;
+  const int width = use_display_rect ? params.display_size.x : params.size.x;
+  const int height = use_display_rect ? params.display_size.y : params.size.y;
 
   blender::immBegin(blender::GPU_PRIM_TRI_STRIP, 4);
 
@@ -678,7 +680,8 @@ static void vertex_draw(const DisplayDriver::Params &params,
 static void draw_tile(const float2 &zoom,
                       const int texcoord_attribute,
                       const int position_attribute,
-                      const DrawTile &draw_tile)
+                      const DrawTile &draw_tile,
+                      const DisplayDriver::Params &current_params)
 {
   if (!draw_tile.ready_to_draw()) {
     return;
@@ -691,40 +694,41 @@ static void draw_tile(const float2 &zoom,
     return;
   }
 
-  /* Trick to keep sharp rendering without jagged edges on all blender::GPUs.
-   *
-   * The idea here is to enforce driver to use linear interpolation when the image is zoomed out.
-   * For the render result with a resolution divider in effect we always use nearest interpolation.
-   *
-   * Use explicit MIN assignment to make sure the driver does not have an undefined behavior at
-   * the zoom level 1. The MAG filter is always NEAREST. */
-  const float zoomed_width = draw_tile.params.size.x * zoom.x;
-  const float zoomed_height = draw_tile.params.size.y * zoom.y;
-  if (texture.width != draw_tile.params.size.x || texture.height != draw_tile.params.size.y) {
+  const bool is_render_resolution = (current_params.display_size.x > 0 &&
+                                     current_params.display_size.y > 0) ||
+                                    (draw_tile.params.display_size.x > 0 &&
+                                     draw_tile.params.display_size.y > 0);
+
+  if (is_render_resolution) {
+    /* Render resolution / pixel art mode: force nearest neighbor filtering. */
+    blender::GPU_texture_bind_ex(
+        texture.gpu_texture, blender::GPUSamplerState::default_sampler(), 0);
+  }
+  else if (texture.width != draw_tile.params.size.x || texture.height != draw_tile.params.size.y) {
     /* Resolution divider is different from 1, force nearest interpolation. */
     blender::GPU_texture_bind_ex(
         texture.gpu_texture, blender::GPUSamplerState::default_sampler(), 0);
   }
-  else if (zoomed_width - draw_tile.params.size.x > -0.5f ||
-           zoomed_height - draw_tile.params.size.y > -0.5f)
-  {
-    blender::GPU_texture_bind_ex(
-        texture.gpu_texture, blender::GPUSamplerState::default_sampler(), 0);
-  }
   else {
-    blender::GPU_texture_bind_ex(texture.gpu_texture, {blender::GPU_SAMPLER_FILTERING_LINEAR}, 0);
+    const float zoomed_width = draw_tile.params.size.x * zoom.x;
+    const float zoomed_height = draw_tile.params.size.y * zoom.y;
+    if (zoomed_width - draw_tile.params.size.x > -0.5f ||
+        zoomed_height - draw_tile.params.size.y > -0.5f)
+    {
+      blender::GPU_texture_bind_ex(
+          texture.gpu_texture, blender::GPUSamplerState::default_sampler(), 0);
+    }
+    else {
+      blender::GPU_texture_bind_ex(texture.gpu_texture, {blender::GPU_SAMPLER_FILTERING_LINEAR}, 0);
+    }
   }
 
-  /* Draw at the parameters for which the texture has been updated for. This allows to always draw
-   * texture during bordered-rendered camera view without flickering. The validness of the display
-   * parameters for a texture is guaranteed by the initial "clear" state which makes drawing to
-   * have an early output.
-   *
-   * Such approach can cause some extra "jelly" effect during panning, but it is not more jelly
-   * than overlay of selected objects. Also, it's possible to redraw texture at an intersection of
-   * the texture draw parameters and the latest updated draw parameters (although, complexity of
-   * doing it might not worth it. */
-  vertex_draw(draw_tile.params, texcoord_attribute, position_attribute);
+  DisplayDriver::Params draw_params = draw_tile.params;
+  if (current_params.display_size.x > 0 && current_params.display_size.y > 0) {
+    draw_params.display_offset = current_params.display_offset;
+    draw_params.display_size = current_params.display_size;
+  }
+  vertex_draw(draw_params, texcoord_attribute, position_attribute);
 }
 
 void BlenderDisplayDriver::flush()
@@ -796,10 +800,10 @@ void BlenderDisplayDriver::draw(const Params &params)
     tiles_->current_tile.need_update_texture_pixels = false;
   }
 
-  draw_tile(zoom_, texcoord_attribute, position_attribute, tiles_->current_tile.tile);
+  draw_tile(zoom_, texcoord_attribute, position_attribute, tiles_->current_tile.tile, params);
 
   for (const DrawTile &tile : tiles_->finished_tiles.tiles) {
-    draw_tile(zoom_, texcoord_attribute, position_attribute, tile);
+    draw_tile(zoom_, texcoord_attribute, position_attribute, tile, params);
   }
 
   /* Reset IMM shader bind state. */

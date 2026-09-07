@@ -111,10 +111,16 @@ class DisplayDriver {
     int2 full_size = make_int2(0, 0);
     int2 full_offset = make_int2(0, 0);
 
+    /* Display quad on screen. If display_size.x > 0 and display_size.y > 0,
+     * the texture is drawn to this screen rectangle rather than full_offset / size. */
+    int2 display_offset = make_int2(0, 0);
+    int2 display_size = make_int2(0, 0);
+
     bool modified(const Params &other) const
     {
       return !(full_offset == other.full_offset && full_size == other.full_size &&
-               size == other.size);
+               size == other.size && display_offset == other.display_offset &&
+               display_size == other.display_size);
     }
   };
 

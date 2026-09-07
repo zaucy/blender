@@ -6,6 +6,7 @@
  * \ingroup bke
  */
 
+#include <algorithm>
 #include <cstdlib>
 #include <optional>
 
@@ -664,7 +665,8 @@ bool BKE_camera_view_render_border(const Scene *scene,
   rctf border;
 
   if (is_camera_view) {
-    const bool use_camera_frame = camera_passepartout_is_opaque(v3d);
+    const bool use_camera_frame = camera_passepartout_is_opaque(v3d) ||
+                                  BKE_render_is_preview_render_resolution(&scene->r);
 
     if ((scene->r.mode & R_BORDER) == 0 && !use_camera_frame) {
       return false;
@@ -706,6 +708,334 @@ bool BKE_camera_view_render_border(const Scene *scene,
   }
 
   *r_border = border;
+  return true;
+}
+
+bool BKE_camera_preview_render_resolution_calc(const Scene *scene,
+                                               const Depsgraph *depsgraph,
+                                               const View3D *v3d,
+                                               const RegionView3D *rv3d,
+                                               const int winx,
+                                               const int winy,
+                                               int *r_target_x,
+                                               int *r_target_y)
+{
+  if (!BKE_render_is_preview_render_resolution(&scene->r)) {
+    return false;
+  }
+
+  int render_x = 0, render_y = 0;
+  BKE_render_resolution(&scene->r, false, &render_x, &render_y);
+  render_x = max_ii(render_x, 1);
+  render_y = max_ii(render_y, 1);
+
+  if (rv3d && rv3d->persp == RV3D_CAMOB) {
+    /* Inside camera view: match the exact render resolution. */
+    *r_target_x = render_x;
+    *r_target_y = render_y;
+    return true;
+  }
+
+  /* Free view (outside camera perspective): simulate camera resolution based on view zoom/scale. */
+  if (v3d && v3d->camera && depsgraph && rv3d && winx > 0 && winy > 0) {
+    const Object *camera_eval = DEG_get_evaluated(depsgraph, v3d->camera);
+    if (camera_eval) {
+      CameraParams cam_params;
+      BKE_camera_params_init(&cam_params);
+      BKE_camera_params_from_object(&cam_params, camera_eval);
+      int render_x = 0, render_y = 0;
+      BKE_render_resolution(&scene->r, false, &render_x, &render_y);
+      render_x = max_ii(1, render_x);
+      render_y = max_ii(1, render_y);
+      BKE_camera_params_compute_viewplane(
+          &cam_params, render_x, render_y, scene->r.xasp, scene->r.yasp);
+
+      CameraParams view_params;
+      BKE_camera_params_init(&view_params);
+      BKE_camera_params_from_view3d(&view_params, depsgraph, v3d, rv3d);
+      BKE_camera_params_compute_viewplane(&view_params, winx, winy, 1.0f, 1.0f);
+
+      const float cam_view_w = BLI_rctf_size_x(&cam_params.viewplane);
+      const float cam_view_h = BLI_rctf_size_y(&cam_params.viewplane);
+      const float view_w = BLI_rctf_size_x(&view_params.viewplane);
+      const float view_h = BLI_rctf_size_y(&view_params.viewplane);
+
+      float scale_ratio = 1.0f;
+      if (view_params.is_ortho && cam_params.is_ortho) {
+        /* Ortho viewport vs Ortho camera: lock to exact camera world pixel size. */
+        const float pixel_world_x = (cam_view_w > 1e-6f) ? (cam_view_w / float(render_x)) : 1.0f;
+        const float pixel_world_y = (cam_view_h > 1e-6f) ? (cam_view_h / float(render_y)) : 1.0f;
+
+        int target_x = int(roundf(view_w / pixel_world_x));
+        int target_y = int(roundf(view_h / pixel_world_y));
+
+        target_x = std::clamp(target_x, 4, winx);
+        target_y = std::clamp(target_y, 4, winy);
+
+        *r_target_x = target_x;
+        *r_target_y = target_y;
+        return true;
+      }
+      else if (!view_params.is_ortho && !cam_params.is_ortho) {
+        /* Perspective viewport vs Perspective camera: compare angular FOV. */
+        const float cam_lens = max_ff(cam_params.lens, 1e-6f);
+        const float view_lens = max_ff(view_params.lens, 1e-6f);
+        scale_ratio = cam_lens / view_lens;
+      }
+      else if (view_params.is_ortho && !cam_params.is_ortho) {
+        /* Ortho viewport vs Perspective camera: use view distance to approximate scale. */
+        const float dist = max_ff(rv3d->dist, 1e-3f);
+        const float effective_cam_scale = (cam_params.sensor_x * dist) /
+                                          max_ff(cam_params.lens, 1e-6f);
+        if (effective_cam_scale > 1e-6f) {
+          scale_ratio = view_w / effective_cam_scale;
+        }
+      }
+      else {
+        /* Perspective viewport vs Ortho camera. */
+        const float dist = max_ff(rv3d->dist, 1e-3f);
+        const float effective_view_scale = (view_params.sensor_x * dist) /
+                                           max_ff(view_params.lens, 1e-6f);
+        if (cam_params.ortho_scale > 1e-6f) {
+          scale_ratio = effective_view_scale / cam_params.ortho_scale;
+        }
+      }
+
+      int target_x = int(roundf(float(render_x) * scale_ratio));
+      int target_y = int(roundf(float(target_x) * (float(winy) / float(winx))));
+
+      target_x = std::clamp(target_x, 4, winx);
+      target_y = std::clamp(target_y, 4, winy);
+
+      *r_target_x = target_x;
+      *r_target_y = target_y;
+      return true;
+    }
+  }
+
+  /* Fallback: use scene render resolution directly. */
+  *r_target_x = render_x;
+  *r_target_y = render_y;
+  return true;
+}
+
+bool BKE_camera_preview_render_subpixel_phase_calc(const Scene *scene,
+                                                   const Depsgraph *depsgraph,
+                                                   const View3D *v3d,
+                                                   const RegionView3D *rv3d,
+                                                   const int winx,
+                                                   const int winy,
+                                                   const int target_x,
+                                                   const int target_y,
+                                                   float *r_phase_x,
+                                                   float *r_phase_y,
+                                                   float *r_delta_view_x,
+                                                   float *r_delta_view_y,
+                                                   float *r_pixel_world_x,
+                                                   float *r_pixel_world_y,
+                                                   float *r_quad_x,
+                                                   float *r_quad_y,
+                                                   float *r_quad_w,
+                                                   float *r_quad_h)
+{
+  *r_phase_x = 0.0f;
+  *r_phase_y = 0.0f;
+  if (r_delta_view_x) {
+    *r_delta_view_x = 0.0f;
+  }
+  if (r_delta_view_y) {
+    *r_delta_view_y = 0.0f;
+  }
+  if (r_pixel_world_x) {
+    *r_pixel_world_x = 0.0f;
+  }
+  if (r_pixel_world_y) {
+    *r_pixel_world_y = 0.0f;
+  }
+  if (r_quad_x) {
+    *r_quad_x = 0.0f;
+  }
+  if (r_quad_y) {
+    *r_quad_y = 0.0f;
+  }
+  if (r_quad_w) {
+    *r_quad_w = float(winx);
+  }
+  if (r_quad_h) {
+    *r_quad_h = float(winy);
+  }
+
+  if (!BKE_render_is_preview_render_resolution(&scene->r) || !rv3d || !depsgraph || !v3d) {
+    return false;
+  }
+
+  if (rv3d->persp == RV3D_CAMOB) {
+    return false;
+  }
+
+  if (target_x <= 0 || target_y <= 0 || winx <= 0 || winy <= 0) {
+    return false;
+  }
+
+  /* Compute world anchor point: active camera location if available, otherwise world origin. */
+  float3 anchor_world(0.0f);
+  CameraParams cam_params;
+  bool has_cam_params = false;
+  if (v3d->camera) {
+    const Object *camera_eval = DEG_get_evaluated(depsgraph, v3d->camera);
+    if (camera_eval) {
+      anchor_world = camera_eval->object_to_world().location();
+      if (camera_eval->type == OB_CAMERA) {
+        BKE_camera_params_init(&cam_params);
+        BKE_camera_params_from_object(&cam_params, camera_eval);
+        int render_x = 0, render_y = 0;
+        BKE_render_resolution(&scene->r, false, &render_x, &render_y);
+        render_x = max_ii(1, render_x);
+        render_y = max_ii(1, render_y);
+        BKE_camera_params_compute_viewplane(
+            &cam_params, render_x, render_y, scene->r.xasp, scene->r.yasp);
+        has_cam_params = true;
+
+        if (cam_params.shiftx != 0.0f || cam_params.shifty != 0.0f) {
+          const float4x4 &ob_mat = camera_eval->object_to_world();
+          const float3 cam_x = math::normalize(ob_mat.x_axis());
+          const float3 cam_y = math::normalize(ob_mat.y_axis());
+          anchor_world += cam_x * (cam_params.shiftx * cam_params.ortho_scale) +
+                          cam_y * (cam_params.shifty * cam_params.ortho_scale);
+        }
+      }
+    }
+  }
+
+  /* Transform world anchor into view space. */
+  float3 anchor_view;
+  mul_v3_m4v3(anchor_view, rv3d->viewmat, anchor_world);
+
+  /* Compute viewplane extents in view space. */
+  CameraParams view_params;
+  BKE_camera_params_init(&view_params);
+  BKE_camera_params_from_view3d(&view_params, depsgraph, v3d, rv3d);
+  BKE_camera_params_compute_viewplane(&view_params, winx, winy, 1.0f, 1.0f);
+
+  const float view_width = BLI_rctf_size_x(&view_params.viewplane);
+  const float view_height = BLI_rctf_size_y(&view_params.viewplane);
+
+  if (view_width <= 1e-6f || view_height <= 1e-6f) {
+    return false;
+  }
+
+  const float view_center_x = 0.5f * (view_params.viewplane.xmin + view_params.viewplane.xmax);
+  const float view_center_y = 0.5f * (view_params.viewplane.ymin + view_params.viewplane.ymax);
+
+  int render_x = 0, render_y = 0;
+  BKE_render_resolution(&scene->r, false, &render_x, &render_y);
+  render_x = max_ii(1, render_x);
+  render_y = max_ii(1, render_y);
+
+  float pixel_world_x = 0.0f;
+  float pixel_world_y = 0.0f;
+  if (has_cam_params && cam_params.is_ortho && view_params.is_ortho) {
+    const float cam_view_w = BLI_rctf_size_x(&cam_params.viewplane);
+    const float cam_view_h = BLI_rctf_size_y(&cam_params.viewplane);
+    if (cam_view_w > 1e-6f && cam_view_h > 1e-6f) {
+      pixel_world_x = cam_view_w / float(render_x);
+      pixel_world_y = cam_view_h / float(render_y);
+    }
+  }
+
+  if (pixel_world_x > 1e-6f && pixel_world_y > 1e-6f) {
+    /* In Ortho mode: snap geometry and size display quad using true world pixel size.
+     * The camera pixel grid in camera space has ray centers:
+     *   u_cam(i) = (i - 0.5 * render_x + 0.5) * pixel_world_x.
+     * The viewport camera rays are centered at:
+     *   u_view(j) = (j - 0.5 * target_x + 0.5) * pixel_world_x.
+     * To ensure every viewport ray lands on the exact same continuous infinite grid as the camera rays,
+     * the subpixel phase offset accounts for the parity difference between target_x and render_x:
+     *   0.5f * float(target_x - render_x).
+     * This completely eliminates the 0.5 pixel alternating jump whenever target_x changes parity during zoom. */
+    const float offset_pix_x = (anchor_view.x - view_center_x) / pixel_world_x +
+                               0.5f * float(target_x - render_x);
+    const float offset_pix_y = (anchor_view.y - view_center_y) / pixel_world_y +
+                               0.5f * float(target_y - render_y);
+
+    *r_phase_x = offset_pix_x - roundf(offset_pix_x);
+    *r_phase_y = offset_pix_y - roundf(offset_pix_y);
+
+    if (r_delta_view_x) {
+      *r_delta_view_x = *r_phase_x * pixel_world_x;
+    }
+    if (r_delta_view_y) {
+      *r_delta_view_y = *r_phase_y * pixel_world_y;
+    }
+    if (r_pixel_world_x) {
+      *r_pixel_world_x = pixel_world_x;
+    }
+    if (r_pixel_world_y) {
+      *r_pixel_world_y = pixel_world_y;
+    }
+
+    const float screen_per_world_x = float(winx) / view_width;
+    const float screen_per_world_y = float(winy) / view_height;
+
+    const float pixel_screen_x = pixel_world_x * screen_per_world_x;
+    const float pixel_screen_y = pixel_world_y * screen_per_world_y;
+
+    const float quad_w = float(target_x) * pixel_screen_x;
+    const float quad_h = float(target_y) * pixel_screen_y;
+
+    const float quad_x = (float(winx) - quad_w) * 0.5f + (*r_phase_x) * pixel_screen_x;
+    const float quad_y = (float(winy) - quad_h) * 0.5f + (*r_phase_y) * pixel_screen_y;
+
+    if (r_quad_x) {
+      *r_quad_x = quad_x;
+    }
+    if (r_quad_y) {
+      *r_quad_y = quad_y;
+    }
+    if (r_quad_w) {
+      *r_quad_w = quad_w;
+    }
+    if (r_quad_h) {
+      *r_quad_h = quad_h;
+    }
+  }
+  else {
+    /* Fallback: simulated pixel size in view space. */
+    const float pixel_view_x = view_width / float(target_x);
+    const float pixel_view_y = view_height / float(target_y);
+
+    const float offset_pix_x = (anchor_view.x - view_center_x) / pixel_view_x +
+                               0.5f * float(target_x - render_x);
+    const float offset_pix_y = (anchor_view.y - view_center_y) / pixel_view_y +
+                               0.5f * float(target_y - render_y);
+
+    *r_phase_x = offset_pix_x - roundf(offset_pix_x);
+    *r_phase_y = offset_pix_y - roundf(offset_pix_y);
+
+    if (r_delta_view_x) {
+      *r_delta_view_x = *r_phase_x * pixel_view_x;
+    }
+    if (r_delta_view_y) {
+      *r_delta_view_y = *r_phase_y * pixel_view_y;
+    }
+
+    const float pixel_screen_x = float(winx) / float(max_ii(1, target_x));
+    const float pixel_screen_y = float(winy) / float(max_ii(1, target_y));
+
+    if (r_quad_x) {
+      *r_quad_x = *r_phase_x * pixel_screen_x;
+    }
+    if (r_quad_y) {
+      *r_quad_y = *r_phase_y * pixel_screen_y;
+    }
+    if (r_quad_w) {
+      *r_quad_w = float(winx);
+    }
+    if (r_quad_h) {
+      *r_quad_h = float(winy);
+    }
+  }
+
   return true;
 }
 

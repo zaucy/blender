@@ -7168,11 +7168,20 @@ static void rna_def_scene_render_data(BlenderRNA *brna)
   PropertyRNA *prop;
 
   static const EnumPropertyItem pixel_size_items[] = {
-      {0, "AUTO", 0, "Automatic", "Automatic pixel size, depends on the user interface scale"},
-      {1, "1", 0, "1" BLI_STR_UTF8_MULTIPLICATION_SIGN, "Render at full resolution"},
-      {2, "2", 0, "2" BLI_STR_UTF8_MULTIPLICATION_SIGN, "Render at 50% resolution"},
-      {4, "4", 0, "4" BLI_STR_UTF8_MULTIPLICATION_SIGN, "Render at 25% resolution"},
-      {8, "8", 0, "8" BLI_STR_UTF8_MULTIPLICATION_SIGN, "Render at 12.5% resolution"},
+      {SCE_PREVIEW_PIXEL_SIZE_AUTO,
+       "AUTO",
+       0,
+       "Automatic",
+       "Automatic pixel size, depends on the user interface scale"},
+      {SCE_PREVIEW_PIXEL_SIZE_1, "1", 0, "1" BLI_STR_UTF8_MULTIPLICATION_SIGN, "Render at full resolution"},
+      {SCE_PREVIEW_PIXEL_SIZE_2, "2", 0, "2" BLI_STR_UTF8_MULTIPLICATION_SIGN, "Render at 50% resolution"},
+      {SCE_PREVIEW_PIXEL_SIZE_4, "4", 0, "4" BLI_STR_UTF8_MULTIPLICATION_SIGN, "Render at 25% resolution"},
+      {SCE_PREVIEW_PIXEL_SIZE_8, "8", 0, "8" BLI_STR_UTF8_MULTIPLICATION_SIGN, "Render at 12.5% resolution"},
+      {SCE_PREVIEW_PIXEL_SIZE_RENDER,
+       "RENDER",
+       0,
+       "Render Resolution",
+       "Match the scene render resolution in camera view (ideal for pixel art)"},
       {0, nullptr, 0, nullptr, nullptr},
   };
 
